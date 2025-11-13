@@ -16,6 +16,73 @@ function stripAuthFields(source) {
   return cleaned;
 }
 
+// Search/filter vehicles
+router.get('/search', async (req, res) => {
+  try {
+    const {
+      q, // general search query
+      registrationNumber,
+      brand,
+      category,
+      model,
+      carName,
+      color,
+      fuelType,
+      ownerName,
+      ownerPhone,
+      status,
+      kycStatus,
+      assignedDriver,
+      minYear,
+      maxYear
+    } = req.query;
+
+    const filter = {};
+
+    // General search across multiple fields
+    if (q && q.trim()) {
+      const searchRegex = new RegExp(q.trim(), 'i');
+      filter.$or = [
+        { registrationNumber: searchRegex },
+        { brand: searchRegex },
+        { category: searchRegex },
+        { model: searchRegex },
+        { carName: searchRegex },
+        { ownerName: searchRegex },
+        { ownerPhone: searchRegex },
+        { assignedDriver: searchRegex }
+      ];
+    }
+
+    // Specific field filters
+    if (registrationNumber) filter.registrationNumber = new RegExp(registrationNumber, 'i');
+    if (brand) filter.brand = new RegExp(brand, 'i');
+    if (category) filter.category = new RegExp(category, 'i');
+    if (model) filter.model = new RegExp(model, 'i');
+    if (carName) filter.carName = new RegExp(carName, 'i');
+    if (color) filter.color = new RegExp(color, 'i');
+    if (fuelType) filter.fuelType = new RegExp(fuelType, 'i');
+    if (ownerName) filter.ownerName = new RegExp(ownerName, 'i');
+    if (ownerPhone) filter.ownerPhone = new RegExp(ownerPhone, 'i');
+    if (status) filter.status = status;
+    if (kycStatus) filter.kycStatus = kycStatus;
+    if (assignedDriver) filter.assignedDriver = new RegExp(assignedDriver, 'i');
+
+    // Year range filter
+    if (minYear || maxYear) {
+      filter.year = {};
+      if (minYear) filter.year.$gte = Number(minYear);
+      if (maxYear) filter.year.$lte = Number(maxYear);
+    }
+
+    const vehicles = await Vehicle.find(filter).lean();
+    res.json(vehicles);
+  } catch (err) {
+    console.error('Error searching vehicles:', err);
+    res.status(500).json({ message: 'Failed to search vehicles' });
+  }
+});
+
 // Get all vehicles
 router.get('/', async (req, res) => {
   try {

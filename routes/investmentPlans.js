@@ -3,6 +3,76 @@ import InvestmentPlan from '../models/investmentPlan.js';
 
 const router = express.Router();
 
+// Search/filter investment plans
+router.get('/search', async (req, res) => {
+  try {
+    const {
+      q, // general search query
+      name,
+      riskLevel,
+      minAmount,
+      maxAmount,
+      minDuration,
+      maxDuration,
+      minROI,
+      maxROI,
+      category
+    } = req.query;
+
+    const filter = {};
+
+    // General search across multiple fields
+    if (q && q.trim()) {
+      const searchRegex = new RegExp(q.trim(), 'i');
+      filter.$or = [
+        { name: searchRegex },
+        { description: searchRegex },
+        { category: searchRegex },
+        { features: searchRegex }
+      ];
+    }
+
+    // Specific field filters
+    if (name) filter.name = new RegExp(name, 'i');
+    if (riskLevel) filter.riskLevel = riskLevel;
+    if (category) filter.category = new RegExp(category, 'i');
+
+    // Amount range filters
+    if (minAmount || maxAmount) {
+      filter.minAmount = {};
+      if (minAmount) filter.minAmount.$gte = Number(minAmount);
+      if (maxAmount) filter.minAmount.$lte = Number(maxAmount);
+    }
+
+    // Duration range filters
+    if (minDuration || maxDuration) {
+      filter.duration = {};
+      if (minDuration) filter.duration.$gte = Number(minDuration);
+      if (maxDuration) filter.duration.$lte = Number(maxDuration);
+    }
+
+    // ROI range filters
+    if (minROI || maxROI) {
+      filter.expectedROI = {};
+      if (minROI) filter.expectedROI.$gte = Number(minROI);
+      if (maxROI) filter.expectedROI.$lte = Number(maxROI);
+    }
+
+    const plans = await InvestmentPlan.find(filter).lean();
+    
+    // Transform _id to id for frontend compatibility
+    const transformedPlans = plans.map(plan => ({
+      ...plan,
+      id: plan._id.toString()
+    }));
+    
+    res.json(transformedPlans);
+  } catch (err) {
+    console.error('Error searching investment plans:', err);
+    res.status(500).json({ message: 'Failed to search investment plans' });
+  }
+});
+
 // GET all investment plans
 router.get('/', async (req, res) => {
   try {
