@@ -64,9 +64,9 @@ const investmentFDSchema = new mongoose.Schema({
     default: 'monthly'
   },
   termMonths: {
-    type: Number,
-    min: 1,
-    max: 12
+     type: Number,
+     min: 1,
+     max: 120 // Increased max to 120 months (10 years)
   },
   termYears: {
     type: Number,
