@@ -5,6 +5,32 @@ import InvestmentFD from '../models/investmentFD.js';
 import { uploadToCloudinary } from '../lib/cloudinary.js';
 
 const router = express.Router();
+// GET investor form data by mobile number
+router.get('/form/mobile/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const investor = await Investor.findOne({ phone }).lean();
+    if (!investor) {
+      return res.status(404).json({ error: 'Investor not found' });
+    }
+    res.json({ investor });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch investor', message: error.message });
+  }
+});
+// GET investor form data by investor ID
+router.get('/form/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const investor = await Investor.findById(id).lean();
+    if (!investor) {
+      return res.status(404).json({ error: 'Investor not found' });
+    }
+    res.json({ investor });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch investor', message: error.message });
+  }
+});
 
 // INVESTOR SIGNUP (plain text password) - Stored in separate collection
 router.post('/signup', async (req, res) => {
