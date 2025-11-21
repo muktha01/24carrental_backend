@@ -169,8 +169,8 @@ router.post('/login-otp', async (req, res) => {
 // GET all investors (only manual entries for admin panel)
 router.get('/', async (req, res) => {
   try {
-    // Only fetch investors added manually by admin (not self-registered)
-    const list = await Investor.find({ isManualEntry: true }).lean();
+    // Fetch all investors (manual and self-registered)
+    const list = await Investor.find().lean();
     // Transform _id to id for frontend compatibility
     const transformedList = list.map(investor => ({
       ...investor,
@@ -265,33 +265,44 @@ router.post('/', async (req, res) => {
         { new: true, runValidators: true }
       );
 
+      // Store completed registration in Investor collection
+      const investorData = {
+        investorName: updated.investorName,
+        email: updated.email,
+        phone: updated.phone,
+        address: updated.address,
+        city: updated.city,
+        state: updated.state,
+        pincode: updated.pincode,
+        dateOfBirth: updated.dateOfBirth,
+        aadharNumber: updated.aadharNumber,
+        panNumber: updated.panNumber,
+        bankName: updated.bankName,
+        accountNumber: updated.accountNumber,
+        ifscCode: updated.ifscCode,
+        accountHolderName: updated.accountHolderName,
+        accountBranchName: updated.accountBranchName,
+        profilePhoto: updated.profilePhoto,
+        aadharDocument: updated.aadharDocument,
+        aadharDocumentBack: updated.aadharDocumentBack,
+        panDocument: updated.panDocument,
+        bankDocument: updated.bankDocument,
+        status: updated.status,
+        kycStatus: updated.kycStatus,
+        isManualEntry: false // Mark as self-registered
+      };
+      // Upsert investor record
+      const savedInvestor = await Investor.findOneAndUpdate(
+        { phone: updated.phone },
+        investorData,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+
       return res.json({
         message: 'Registration completed successfully',
         investor: {
-          id: updated._id,
-          investorName: updated.investorName,
-          email: updated.email,
-          phone: updated.phone,
-          registrationCompleted: updated.registrationCompleted,
-          address: updated.address,
-          city: updated.city,
-          state: updated.state,
-          pincode: updated.pincode,
-          dateOfBirth: updated.dateOfBirth,
-          aadharNumber: updated.aadharNumber,
-          panNumber: updated.panNumber,
-          bankName: updated.bankName,
-          accountNumber: updated.accountNumber,
-          ifscCode: updated.ifscCode,
-          accountHolderName: updated.accountHolderName,
-          accountBranchName: updated.accountBranchName,
-          profilePhoto: updated.profilePhoto,
-          aadharDocument: updated.aadharDocument,
-          aadharDocumentBack: updated.aadharDocumentBack,
-          panDocument: updated.panDocument,
-          bankDocument: updated.bankDocument,
-          status: updated.status,
-          kycStatus: updated.kycStatus
+          id: savedInvestor._id,
+          ...investorData
         }
       });
     }
