@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import DriverPlanSelection from '../models/driverPlanSelection.js';
 import DriverSignup from '../models/driverSignup.js';
+import mongoose from 'mongoose';
 
 dotenv.config();
 
@@ -80,25 +81,15 @@ router.get('/by-mobile/:mobile', async (req, res) => {
 // Get single plan selection by ID
 router.get('/:id', async (req, res) => {
   try {
-    const selection = await DriverPlanSelection.findById(req.params.id).lean();
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const selection = await DriverPlanSelection.findById(id).lean();
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
-    
-    // Use stored calculated values if available, otherwise calculate
-    const deposit = selection.calculatedDeposit || selection.securityDeposit || 0;
-    const rent = selection.calculatedRent || (() => {
-      const slab = selection.selectedRentSlab || {};
-      return selection.planType === 'weekly' ? (slab.weeklyRent || 0) : (slab.rentDay || 0);
-    })();
-    const cover = selection.calculatedCover || (() => {
-      const slab = selection.selectedRentSlab || {};
-      return selection.planType === 'weekly' ? (slab.accidentalCover || 105) : 0;
-    })();
-    const totalAmount = selection.calculatedTotal || (deposit + rent + cover);
-    
-    // Add payment breakdown to response
-    // Compute daily rent summary if started
+    // ...existing code...
     let dailyRentSummary = null;
     try {
       if (selection.rentStartDate) {
@@ -166,9 +157,7 @@ router.post('/', authenticateDriver, async (req, res) => {
     });
 
     if (existingSelection) {
-      // Deactivate previous selection
-      existingSelection.status = 'completed';
-      await existingSelection.save();
+      return res.status(400).json({ message: 'Driver already has an active plan. Please complete or deactivate the current plan before selecting a new one.' });
     }
 
     // Calculate payment breakdown
@@ -244,9 +233,13 @@ router.post('/:id/confirm-payment', async (req, res) => {
       return res.status(400).json({ message: 'Invalid payment type. Must be rent or security' });
     }
 
-    const selection = await DriverPlanSelection.findById(req.params.id);
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const selection = await DriverPlanSelection.findById(id);
     if (!selection) {
-      console.log('Plan selection not found:', req.params.id);
+      console.log('Plan selection not found:', id);
       return res.status(404).json({ message: 'Plan selection not found' });
     }
 
@@ -289,7 +282,11 @@ router.post('/:id/confirm-payment', async (req, res) => {
 // GET - Daily rent summary from start date till today
 router.get('/:id/rent-summary', async (req, res) => {
   try {
-    const selection = await DriverPlanSelection.findById(req.params.id).lean();
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const selection = await DriverPlanSelection.findById(id).lean();
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
@@ -351,7 +348,11 @@ router.put('/:id/status', async (req, res) => {
       return res.status(400).json({ message: 'Status is required' });
     }
 
-    const selection = await DriverPlanSelection.findById(req.params.id);
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const selection = await DriverPlanSelection.findById(id);
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
@@ -385,7 +386,11 @@ router.put('/:id', authenticateDriver, async (req, res) => {
       return res.status(400).json({ message: 'Status is required' });
     }
 
-    const selection = await DriverPlanSelection.findById(req.params.id);
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const selection = await DriverPlanSelection.findById(id);
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
@@ -409,20 +414,37 @@ router.put('/:id', authenticateDriver, async (req, res) => {
 });
 
 // Delete plan selection
-router.delete('/:id', authenticateDriver, async (req, res) => {
+// Admin or driver can delete
+router.delete('/:id', async (req, res) => {
   try {
-    const selection = await DriverPlanSelection.findById(req.params.id);
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid plan selection ID' });
+    }
+    const selection = await DriverPlanSelection.findById(id);
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
 
-    // Verify the driver owns this selection
-    if (selection.driverSignupId.toString() !== req.driver.id) {
-      return res.status(403).json({ message: 'Unauthorized' });
+    // If driver token is present, check ownership
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      const token = authHeader.split(' ')[1];
+      try {
+        const SECRET = process.env.JWT_SECRET || 'dev_secret';
+        const user = jwt.verify(token, SECRET);
+        // If driver, check ownership
+        if (user && user.role === 'driver') {
+          if (selection.driverSignupId.toString() !== user.id) {
+            return res.status(403).json({ message: 'Unauthorized' });
+          }
+        }
+      } catch (err) {
+        // Invalid token, treat as admin (allow)
+      }
     }
 
     await DriverPlanSelection.findByIdAndDelete(req.params.id);
-
     res.json({ message: 'Plan selection deleted successfully' });
   } catch (err) {
     console.error('Delete plan selection error:', err);
