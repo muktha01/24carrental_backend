@@ -24,7 +24,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-
 // Update car investment entry by ID
 router.put('/:id', async (req, res) => {
   try {
@@ -34,6 +33,22 @@ router.put('/:id', async (req, res) => {
       { new: true }
     );
     if (!updated) return res.status(404).json({ error: 'Entry not found' });
+
+    // Update monthlyProfitMin for all related vehicles
+    const Vehicle = (await import('../models/vehicle.js')).default;
+    const vehicles = await Vehicle.find({
+      $or: [
+        { category: new RegExp(`^${updated.name}$`, 'i') },
+        { carCategory: new RegExp(`^${updated.name}$`, 'i') }
+      ]
+    });
+    for (const v of vehicles) {
+      const minAmount = parseFloat(updated.minAmount || 0);
+      const expectedROI = parseFloat(updated.expectedROI || 0);
+      v.monthlyProfitMin = minAmount * (expectedROI / 100) / 12;
+      await v.save();
+    }
+
     res.json(updated);
   } catch (err) {
     res.status(400).json({ error: err.message });

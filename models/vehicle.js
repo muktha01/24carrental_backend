@@ -125,7 +125,11 @@ const VehicleSchema = new mongoose.Schema({
       accidentalCover: Number,
       acceptanceRate: Number
     }
-  ]
+  ],
+    monthlyProfitMin: {
+      type: Number,
+      default: 0
+    }
 }, { 
   timestamps: true,
   strict: false // Allow additional fields
