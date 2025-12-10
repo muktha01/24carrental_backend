@@ -66,7 +66,19 @@ const DriverPlanSelectionSchema = new mongoose.Schema({
   extraAmount: { type: Number, default: 0 },
   extraReason: { type: String, default: '' },
   adjustmentAmount: { type: Number, default: 0 },
-  adjustmentReason: { type: String, default: '' }
+  adjustmentReason: { type: String, default: '' },
+  // Array to store individual adjustments with dates
+  adjustments: [{
+    amount: { type: Number, required: true },
+    reason: { type: String, default: '' },
+    date: { type: Date, default: Date.now }
+  }],
+  // Array to store individual extra amounts with dates
+  extraAmounts: [{
+    amount: { type: Number, required: true },
+    reason: { type: String, default: '' },
+    date: { type: Date, default: Date.now }
+  }]
 }, { timestamps: true });
 
 // Index for faster queries

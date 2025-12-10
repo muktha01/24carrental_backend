@@ -15,6 +15,85 @@ dotenv.config();
 
 const router = express.Router();
 const SECRET = process.env.JWT_SECRET || 'dev_secret';
+
+// Helper function to calculate payment details
+function calculatePaymentDetails(selection) {
+  // Calculate days (inclusive)
+  let days = 0;
+  if (selection.rentStartDate) {
+    const start = new Date(selection.rentStartDate);
+    let end = new Date();
+    if (selection.status === 'inactive' && selection.rentPausedDate) {
+      end = new Date(selection.rentPausedDate);
+    }
+    // Normalize to midnight for both dates
+    const startMidnight = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    const endMidnight = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    days = Math.floor((endMidnight - startMidnight) / (1000 * 60 * 60 * 24)) + 1;
+    days = Math.max(1, days);
+  }
+
+  // Rent per day/week
+  const rentPerDay = selection.calculatedRent || (() => {
+    const slab = selection.selectedRentSlab || {};
+    return selection.planType === 'weekly' ? (slab.weeklyRent || 0) : (slab.rentDay || 0);
+  })();
+
+  // Accidental cover for weekly plans
+  const accidentalCover = selection.planType === 'weekly' 
+    ? (selection.calculatedCover || (selection.selectedRentSlab?.accidentalCover || 105)) 
+    : 0;
+
+  // Adjustment and paid amounts
+  const adjustment = selection.adjustmentAmount || 0;
+  const paidAmount = selection.paidAmount || 0;
+  
+  // Total amounts
+  const totalDeposit = selection.securityDeposit || 0;
+  const totalRent = days * rentPerDay;
+
+  // Calculate how much has been paid towards each
+  let depositDue = 0;
+  let rentDue = 0;
+
+  if (selection.paymentType === 'security') {
+    // Payment was for deposit
+    // Deposit Due = Total Deposit - What was paid
+    depositDue = Math.max(0, totalDeposit - paidAmount);
+    // Rent is full amount (not paid yet), minus adjustment
+    rentDue = Math.max(0, totalRent - adjustment);
+  } else if (selection.paymentType === 'rent') {
+    // Payment was for rent
+    // Rent Due = Total Rent - What was paid - Adjustment
+    rentDue = Math.max(0, totalRent - paidAmount - adjustment);
+    // Deposit is still full amount (not paid yet)
+    depositDue = totalDeposit;
+  } else {
+    // No payment type specified - both are due
+    depositDue = totalDeposit;
+    rentDue = Math.max(0, totalRent - adjustment);
+  }
+
+  // Extra amount
+  const extraAmount = selection.extraAmount || 0;
+
+  // Total payable = deposit due + rent due (already adjusted) + accidental cover + extra
+  const totalPayable = Math.max(0, depositDue + rentDue + accidentalCover + extraAmount);
+
+  return {
+    days,
+    rentPerDay,
+    totalRent,
+    accidentalCover,
+    depositDue,
+    rentDue,
+    extraAmount,
+    adjustment,
+    paidAmount,
+    totalPayable
+  };
+}
+
 router.patch('/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -26,20 +105,38 @@ router.patch('/:id', async (req, res) => {
     if (!selection) {
       return res.status(404).json({ message: 'Plan selection not found' });
     }
-    if (typeof extraAmount !== 'undefined') selection.extraAmount = extraAmount;
-    if (typeof extraReason !== 'undefined') selection.extraReason = extraReason;
-    // Make adjustment amount cumulative (add to existing instead of replacing)
+    
+    // Handle extra amount - add to cumulative total and push to array
+    if (typeof extraAmount !== 'undefined') {
+      selection.extraAmount = (selection.extraAmount || 0) + extraAmount;
+      if (!selection.extraAmounts) selection.extraAmounts = [];
+      selection.extraAmounts.push({
+        amount: extraAmount,
+        reason: extraReason || '',
+        date: new Date()
+      });
+      // Update the legacy reason field
+      if (extraReason) {
+        selection.extraReason = extraReason;
+      }
+    }
+    
+    // Handle adjustment amount - add to cumulative total and push to array
     if (typeof adjustmentAmount !== 'undefined') {
       const currentAdjustment = selection.adjustmentAmount || 0;
       selection.adjustmentAmount = currentAdjustment + adjustmentAmount;
-      // Append new reason to existing reasons
+      if (!selection.adjustments) selection.adjustments = [];
+      selection.adjustments.push({
+        amount: adjustmentAmount,
+        reason: adjustmentReason || '',
+        date: new Date()
+      });
+      // Update the legacy reason field
       if (adjustmentReason) {
-        const existingReason = selection.adjustmentReason || '';
-        selection.adjustmentReason = existingReason 
-          ? `${existingReason} | ${adjustmentReason}` 
-          : adjustmentReason;
+        selection.adjustmentReason = adjustmentReason;
       }
     }
+    
     await selection.save();
     res.json({ message: 'Extra/adjustment amount updated', selection });
   } catch (err) {
@@ -232,7 +329,14 @@ router.get('/by-manager/:manager', async (req, res) => {
     const payments = await DriverPlanSelection.find(paymentQuery).lean();
 
     console.log(`Found ${payments.length} payments for manager`);
-    res.json(payments);
+    
+    // Add calculated payment details to each payment
+    const paymentsWithDetails = payments.map(p => ({
+      ...p,
+      paymentDetails: calculatePaymentDetails(p)
+    }));
+    
+    res.json(paymentsWithDetails);
   } catch (err) {
     console.error('Get payments by manager error:', err);
     res.status(500).json({ message: 'Failed to load payments for manager', error: err.message });
@@ -273,27 +377,12 @@ router.get('/', async (req, res) => {
       .limit(limit)
       .lean();
     
-    // Ensure all selections have calculated values
+    // Add calculated payment details to each selection
     const selectionsWithBreakdown = selections.map(s => {
-      const deposit = s.calculatedDeposit || s.securityDeposit || 0;
-      const rent = s.calculatedRent || (() => {
-        const slab = s.selectedRentSlab || {};
-        return s.planType === 'weekly' ? (slab.weeklyRent || 0) : (slab.rentDay || 0);
-      })();
-      const cover = s.calculatedCover || (() => {
-        const slab = s.selectedRentSlab || {};
-        return s.planType === 'weekly' ? (slab.accidentalCover || 105) : 0;
-      })();
-      const extraAmount = s.extraAmount || 0;
-      const total = s.calculatedTotal || (deposit + rent + cover + extraAmount);
+      const paymentDetails = calculatePaymentDetails(s);
       return {
         ...s,
-        calculatedDeposit: deposit,
-        calculatedRent: rent,
-        calculatedCover: cover,
-        extraAmount,
-        calculatedTotal: total,
-        extraReason: s.extraReason || ''
+        paymentDetails
       };
     });
     
@@ -517,11 +606,13 @@ router.post('/:id/confirm-payment', async (req, res) => {
     selection.paymentStatus = 'completed';
     selection.paymentDate = new Date();
     
-    // Store the manually entered payment amount and type
+    // Store the manually entered payment amount and type (cumulative)
     if (paidAmount !== undefined && paidAmount !== null) {
-      selection.paidAmount = Number(paidAmount);
+      const previousAmount = selection.paidAmount || 0;
+      const newPayment = Number(paidAmount);
+      selection.paidAmount = previousAmount + newPayment;
       selection.paymentType = paymentType || 'rent';
-      console.log('Storing manual payment amount:', selection.paidAmount, 'Type:', selection.paymentType);
+      console.log('Adding payment:', newPayment, 'Previous:', previousAmount, 'New Total:', selection.paidAmount, 'Type:', selection.paymentType);
     }
 
     const updatedSelection = await selection.save();
