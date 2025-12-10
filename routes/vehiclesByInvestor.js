@@ -181,6 +181,7 @@ router.get('/:investorId', async (req, res) => {
         rentPeriods: vehicle.rentPeriods || [],
         // Add car investment data
         carValue: matchedInvestment?.carvalue || 0,
+        monthlyPayout: matchedInvestment?.MonthlyPayout || 0,
         deductionTDS: matchedInvestment?.deductionTDS || 0,
         finalMonthlyPayout: matchedInvestment?.finalMonthlyPayout || 0,
         carInvestmentName: matchedInvestment?.carname || ''
