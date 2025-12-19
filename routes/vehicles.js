@@ -95,6 +95,56 @@ function normalizeVehicleShape(v) {
   return { ...base, ...(v || {}) };
 }
 
+// Get filter options - returns unique values for categories, fuel types, seating capacities
+router.get('/filter-options', async (req, res) => {
+  try {
+    const { city, location, status = 'active' } = req.query;
+    
+    // Build base filter for active vehicles
+    const filter = { status };
+    
+    if (city) {
+      filter.city = new RegExp(`^${city.trim()}$`, 'i');
+    }
+    
+    if (location) {
+      filter.location = new RegExp(location.trim(), 'i');
+    }
+
+    // Get all vehicles matching the base filter
+    const vehicles = await Vehicle.find(filter).select('category fuelType seatingCapacity pricePerDay').lean();
+
+    // Extract unique values
+    const categories = [...new Set(vehicles.map(v => v.category).filter(Boolean))].sort();
+    const fuelTypes = [...new Set(vehicles.map(v => v.fuelType).filter(Boolean))].sort();
+    const seatingCapacities = [...new Set(vehicles.map(v => v.seatingCapacity).filter(Boolean))].sort((a, b) => a - b);
+    
+    // Calculate price range
+    const prices = vehicles.map(v => v.pricePerDay || 0).filter(p => p > 0);
+    const priceRange = {
+      min: prices.length > 0 ? Math.min(...prices) : 0,
+      max: prices.length > 0 ? Math.max(...prices) : 0
+    };
+
+    res.json({
+      success: true,
+      data: {
+        categories,
+        fuelTypes,
+        seatingCapacities,
+        priceRange
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching filter options:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch filter options',
+      error: err.message 
+    });
+  }
+});
+
 // Search vehicles by city and location (optimized for frontend search)
 router.get('/search/by-location', async (req, res) => {
   try {
