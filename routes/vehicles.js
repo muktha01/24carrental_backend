@@ -95,6 +95,95 @@ function normalizeVehicleShape(v) {
   return { ...base, ...(v || {}) };
 }
 
+// Search vehicles by city and location (optimized for frontend search)
+router.get('/search/by-location', async (req, res) => {
+  try {
+    const {
+      city,
+      location,
+      category,
+      fuelType,
+      seatingCapacity,
+      minPrice,
+      maxPrice,
+      status = 'active',
+      tripStart,
+      tripEnd
+    } = req.query;
+
+    const filter = {};
+
+    // City filter (exact match, case-insensitive)
+    if (city) {
+      filter.city = new RegExp(`^${city.trim()}$`, 'i');
+    }
+
+    // Location filter (partial match, case-insensitive)
+    if (location) {
+      filter.location = new RegExp(location.trim(), 'i');
+    }
+
+    // Status filter (default to active)
+    if (status) {
+      filter.status = status;
+    }
+
+    // Category filter
+    if (category) {
+      filter.category = new RegExp(`^${category.trim()}$`, 'i');
+    }
+
+    // Fuel type filter
+    if (fuelType) {
+      filter.fuelType = new RegExp(`^${fuelType.trim()}$`, 'i');
+    }
+
+    // Seating capacity filter
+    if (seatingCapacity) {
+      filter.seatingCapacity = parseInt(seatingCapacity);
+    }
+
+    // Price range filter
+    if (minPrice || maxPrice) {
+      filter.pricePerDay = {};
+      if (minPrice) filter.pricePerDay.$gte = Number(minPrice);
+      if (maxPrice) filter.pricePerDay.$lte = Number(maxPrice);
+    }
+
+    // Fetch vehicles
+    const vehicles = await Vehicle.find(filter)
+      .select('-__v')
+      .sort({ pricePerDay: 1, vehicleId: 1 })
+      .lean();
+
+    // Format response with additional metadata
+    const response = {
+      success: true,
+      count: vehicles.length,
+      filters: {
+        city,
+        location,
+        category,
+        fuelType,
+        seatingCapacity,
+        minPrice,
+        maxPrice,
+        status
+      },
+      data: vehicles.map(normalizeVehicleShape)
+    };
+
+    res.json(response);
+  } catch (err) {
+    console.error('Error searching vehicles by location:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to search vehicles',
+      error: err.message 
+    });
+  }
+});
+
 // Search/filter vehicles
 router.get('/search', async (req, res) => {
   try {
