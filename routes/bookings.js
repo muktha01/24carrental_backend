@@ -99,6 +99,42 @@ router.post('/', verifyToken, async (req, res) => {
     // Calculate number of days
     const startDate = new Date(tripStartDate);
     const endDate = tripEndDate ? new Date(tripEndDate) : new Date(tripStartDate);
+
+    // Check for existing bookings that conflict with the requested dates
+    const conflictingBookings = await Booking.find({
+      vehicleId,
+      status: { $in: ['pending', 'confirmed', 'ongoing'] }, // Only check active bookings
+      $or: [
+        {
+          // New booking starts during an existing booking
+          tripStartDate: { $lte: startDate },
+          tripEndDate: { $gte: startDate }
+        },
+        {
+          // New booking ends during an existing booking
+          tripStartDate: { $lte: endDate },
+          tripEndDate: { $gte: endDate }
+        },
+        {
+          // New booking completely contains an existing booking
+          tripStartDate: { $gte: startDate },
+          tripEndDate: { $lte: endDate }
+        }
+      ]
+    });
+
+    if (conflictingBookings.length > 0) {
+      const existingBooking = conflictingBookings[0];
+      return res.status(409).json({
+        success: false,
+        message: 'This vehicle is already booked for the selected dates',
+        conflictDetails: {
+          bookedFrom: existingBooking.tripStartDate,
+          bookedUntil: existingBooking.tripEndDate,
+          bookingStatus: existingBooking.status
+        }
+      });
+    }
     const diffTime = Math.abs(endDate - startDate);
     const calculatedDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
 
@@ -196,6 +232,103 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch bookings',
+      error: error.message
+    });
+  }
+});
+
+// Get bookings by mobile number
+router.get('/by-mobile/:mobile', async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { status, limit = 100 } = req.query;
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mobile number is required'
+      });
+    }
+
+    // Build filter
+    const filter = { driverMobile: mobile };
+    if (status) filter.status = status;
+
+    const bookings = await Booking.find(filter)
+      .populate('vehicleId', 'carName model brand carFullPhoto status pricePerDay')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
+    res.json({
+      success: true,
+      count: bookings.length,
+      mobile,
+      bookings
+    });
+
+  } catch (error) {
+    console.error('Get bookings by mobile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch bookings',
+      error: error.message
+    });
+  }
+});
+
+// Check vehicle availability for specific dates
+router.get('/check-availability/:vehicleId', async (req, res) => {
+  try {
+    const { vehicleId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!startDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Start date is required'
+      });
+    }
+
+    const start = new Date(startDate);
+    const end = endDate ? new Date(endDate) : new Date(startDate);
+
+    // Check for conflicting bookings
+    const conflictingBookings = await Booking.find({
+      vehicleId,
+      status: { $in: ['pending', 'confirmed', 'ongoing'] },
+      $or: [
+        {
+          tripStartDate: { $lte: start },
+          tripEndDate: { $gte: start }
+        },
+        {
+          tripStartDate: { $lte: end },
+          tripEndDate: { $gte: end }
+        },
+        {
+          tripStartDate: { $gte: start },
+          tripEndDate: { $lte: end }
+        }
+      ]
+    }).select('tripStartDate tripEndDate status driverName');
+
+    const isAvailable = conflictingBookings.length === 0;
+
+    res.json({
+      success: true,
+      available: isAvailable,
+      requestedDates: {
+        startDate: start,
+        endDate: end
+      },
+      conflictingBookings: isAvailable ? [] : conflictingBookings
+    });
+
+  } catch (error) {
+    console.error('Check availability error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check availability',
       error: error.message
     });
   }

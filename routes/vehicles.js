@@ -1,5 +1,6 @@
 import express from 'express';
 import Vehicle from '../models/vehicle.js';
+import Booking from '../models/booking.js';
 // auth middleware not applied; token used only for login
 import { uploadToCloudinary } from '../lib/cloudinary.js';
 
@@ -206,10 +207,44 @@ router.get('/search/by-location', async (req, res) => {
       .sort({ pricePerDay: 1, vehicleId: 1 })
       .lean();
 
+    // Filter out vehicles that are already booked for the requested dates
+    let availableVehicles = vehicles;
+    
+    if (tripStart) {
+      const startDate = new Date(tripStart);
+      const endDate = tripEnd ? new Date(tripEnd) : new Date(tripStart);
+
+      // Find all vehicle IDs that have conflicting bookings
+      const conflictingBookings = await Booking.find({
+        status: { $in: ['pending', 'confirmed', 'ongoing'] },
+        $or: [
+          {
+            tripStartDate: { $lte: startDate },
+            tripEndDate: { $gte: startDate }
+          },
+          {
+            tripStartDate: { $lte: endDate },
+            tripEndDate: { $gte: endDate }
+          },
+          {
+            tripStartDate: { $gte: startDate },
+            tripEndDate: { $lte: endDate }
+          }
+        ]
+      }).distinct('vehicleId');
+
+      // Filter out vehicles with conflicting bookings
+      availableVehicles = vehicles.filter(vehicle => 
+        !conflictingBookings.some(bookedVehicleId => 
+          bookedVehicleId.toString() === vehicle._id.toString()
+        )
+      );
+    }
+
     // Format response with additional metadata
     const response = {
       success: true,
-      count: vehicles.length,
+      count: availableVehicles.length,
       filters: {
         city,
         location,
@@ -220,7 +255,7 @@ router.get('/search/by-location', async (req, res) => {
         maxPrice,
         status
       },
-      data: vehicles.map(normalizeVehicleShape)
+      data: availableVehicles.map(normalizeVehicleShape)
     };
 
     res.json(response);
