@@ -482,6 +482,104 @@ router.post('/admin/send', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/notifications/send-by-mobile - Send notifications to users by mobile/phone (mobile app)
+router.post('/send-by-mobile', authenticateToken, async (req, res) => {
+  try {
+    const { mobiles = [], userType = 'driver', title, message, link, sendType, scheduledTime } = req.body;
+
+    if (!mobiles || !Array.isArray(mobiles) || mobiles.length === 0) {
+      return res.status(400).json({ message: 'Please provide one or more mobile numbers in "mobiles" array' });
+    }
+
+    if (!title && !message) {
+      return res.status(400).json({ message: 'Please provide at least a title or message' });
+    }
+
+    if (sendType === 'schedule' && !scheduledTime) {
+      return res.status(400).json({ message: 'Please provide scheduled time for scheduled notifications' });
+    }
+
+    // Find matching users by mobile/phone depending on userType
+    let users = [];
+    if (userType === 'driver') {
+      users = await Driver.find({ $or: [{ mobile: { $in: mobiles } }, { phone: { $in: mobiles } }] }).select('_id mobile phone name').lean();
+    } else {
+      users = await Investor.find({ phone: { $in: mobiles } }).select('_id phone investorName').lean();
+    }
+
+    if (!users || users.length === 0) {
+      return res.status(404).json({ message: 'No matching users found for provided mobile numbers' });
+    }
+
+    const userIds = users.map(u => u._id);
+    const results = [];
+
+    // Scheduled notifications
+    if (sendType === 'schedule') {
+      const scheduledDate = new Date(scheduledTime);
+      if (scheduledDate <= new Date()) {
+        return res.status(400).json({ message: 'Scheduled time must be in the future' });
+      }
+
+      const notifications = userIds.map(id => ({
+        userId: id,
+        userType: userType === 'driver' ? 'driver' : 'investor',
+        type: 'admin_notification',
+        title: title || '',
+        message: message || '',
+        payload: { link: link || '' },
+        scheduledFor: scheduledDate,
+        isScheduled: true,
+        read: false
+      }));
+
+      const created = await Notification.insertMany(notifications);
+      results.push(...created.map(n => ({ userId: n.userId, userType: n.userType, notificationId: n._id })));
+
+      return res.json({ success: true, message: `Notification scheduled for ${results.length} user(s)`, results, scheduledFor: scheduledDate });
+    }
+
+    // Immediate notifications
+    const notifications = userIds.map(id => ({
+      userId: id,
+      userType: userType === 'driver' ? 'driver' : 'investor',
+      type: 'admin_notification',
+      title: title || '',
+      message: message || '',
+      payload: { link: link || '' },
+      read: false
+    }));
+
+    const created = await Notification.insertMany(notifications);
+    results.push(...created.map(n => ({ userId: n.userId, userType: n.userType, notificationId: n._id })));
+
+    // Emit socket events for real-time notifications
+    if (req.app.locals.io) {
+      userIds.forEach(id => {
+        const room = userType === 'driver' ? `driver:${id}` : `investor:${id}`;
+        req.app.locals.io.to(room).emit('new_notification', {
+          title: title || '',
+          message: message || '',
+          link: link || ''
+        });
+      });
+    }
+
+    // Send FCM notifications
+    try {
+      await _sendFcmToUserIds(userType === 'driver' ? 'driver' : 'investor', userIds, title, message, { link: link || '' });
+    } catch (err) {
+      console.error('Error sending FCM to users by mobile:', err);
+    }
+
+    res.json({ success: true, message: `Notification sent to ${results.length} user(s)`, results });
+  } catch (err) {
+    console.error('Error sending notification by mobile:', err);
+    res.status(500).json({ message: 'Failed to send notification', error: err.message });
+  }
+});
+
+
 // ============= REGULAR NOTIFICATION ROUTES =============
 
 // Get recent notifications
@@ -533,6 +631,7 @@ router.all('*', (req, res) => {
       'GET /api/notifications/admin/investors',
       'POST /api/notifications/admin/send-specific',
       'POST /api/notifications/admin/send',
+      'POST /api/notifications/send-by-mobile',
       'PATCH /api/notifications/mark-all-read',
       'PATCH /api/notifications/:id/mark-read'
     ]

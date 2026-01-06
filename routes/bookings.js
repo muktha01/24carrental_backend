@@ -3,7 +3,25 @@ import Booking from '../models/booking.js';
 import Vehicle from '../models/vehicle.js';
 import DriverSignup from '../models/driverSignup.js';
 import Notification from '../models/notification.js';
+import FcmToken from '../models/fcmToken.js';
+import { sendToTokens } from '../lib/firebaseAdmin.js';
 import jwt from 'jsonwebtoken';
+
+// Helper to send FCM to driver userIds
+async function _sendFcmToUserIds(userIds, title, message, payload = {}) {
+  if (!userIds || userIds.length === 0) return;
+  const tokenDocs = await FcmToken.find({ userId: { $in: userIds }, userType: 'driver' }).lean();
+  const tokens = tokenDocs.map(t => t.token).filter(Boolean);
+  if (tokens.length === 0) return;
+  try {
+    const notification = { title: title || '', body: message || '' };
+    await sendToTokens(tokens, notification, { payload: JSON.stringify(payload) }).catch(err => {
+      console.error('Error sending multicast FCM:', err);
+    });
+  } catch (err) {
+    console.error('Error sending FCM:', err);
+  }
+}
 
 const router = express.Router();
 
@@ -593,6 +611,41 @@ router.patch('/:id/payment', async (req, res) => {
     }
 
     await booking.save();
+
+    // If this payment completed the booking, notify the booking owner (driver)
+    try {
+      if (paymentStatus === 'completed') {
+        // Persist notification for the user
+        await Notification.create({
+          userId: booking.driverId,
+          userType: 'driver',
+          type: 'payment_completed',
+          title: 'Payment received',
+          message: `Payment completed for booking ${booking._id}. Your booking is confirmed.`,
+          payload: { bookingId: booking._id },
+          read: false
+        });
+
+        // Emit socket event to user's room if available
+        const io = req.app?.locals?.io;
+        if (io) {
+          io.to(`driver:${booking.driverId}`).emit('payment_completed', {
+            bookingId: booking._id,
+            title: 'Payment received',
+            message: `Payment completed for booking ${booking._id}. Your booking is confirmed.`
+          });
+        }
+
+        // Send FCM
+        try {
+          await _sendFcmToUserIds([booking.driverId], 'Payment received', `Payment completed for booking ${booking._id}. Your booking is confirmed.`, { bookingId: booking._id });
+        } catch (err) {
+          console.error('Failed to send FCM on payment completion:', err);
+        }
+      }
+    } catch (notifErr) {
+      console.error('Failed to send payment notifications:', notifErr);
+    }
 
     res.json({
       success: true,

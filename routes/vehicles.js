@@ -5,8 +5,27 @@ import Driver from '../models/driver.js';
 import DriverSignup from '../models/driverSignup.js';
 import DriverPlanSelection from '../models/driverPlanSelection.js';
 import mongoose from 'mongoose';
+import Notification from '../models/notification.js';
+import FcmToken from '../models/fcmToken.js';
+import { sendToTokens } from '../lib/firebaseAdmin.js';
 // auth middleware not applied; token used only for login
 import { uploadToCloudinary } from '../lib/cloudinary.js';
+
+// Helper to send FCM to userIds (driver/investor)
+async function _sendFcmToUserIds(userType, userIds, title, message, payload = {}) {
+  if (!userIds || userIds.length === 0) return;
+  const tokenDocs = await FcmToken.find({ userId: { $in: userIds }, userType }).lean();
+  const tokens = tokenDocs.map(t => t.token).filter(Boolean);
+  if (tokens.length === 0) return;
+  try {
+    const notification = { title: title || '', body: message || '' };
+    await sendToTokens(tokens, notification, { payload: JSON.stringify(payload) }).catch(err => {
+      console.error('Error sending multicast FCM:', err);
+    });
+  } catch (err) {
+    console.error('Error sending FCM:', err);
+  }
+}
 
 const router = express.Router();
 
@@ -879,6 +898,53 @@ router.put('/:id', async (req, res) => {
                 } catch (e) {
                   console.error('Error counting clause matches:', clause, e);
                 }
+              }
+
+              // Additionally, notify any confirmed bookings for this vehicle that it has been assigned
+              try {
+                const confirmedBookings = await Booking.find({ vehicleId: vehicle._id, status: 'confirmed' }).lean();
+                if (confirmedBookings && confirmedBookings.length > 0) {
+                  const userIds = confirmedBookings.map(b => b.driverId).filter(Boolean);
+
+                  // Create notifications in DB for each booking owner
+                  const notifs = confirmedBookings.map(b => ({
+                    userId: b.driverId,
+                    userType: 'driver',
+                    type: 'vehicle_assigned',
+                    title: 'Vehicle Assigned',
+                    message: `Your vehicle ${vehicle.carName || vehicle.name || ''} has been assigned.`,
+                    payload: { bookingId: b._id, vehicleId: vehicle._id },
+                    read: false
+                  }));
+
+                  try {
+                    await Notification.insertMany(notifs);
+                  } catch (e) {
+                    console.error('Failed to insert vehicle assigned notifications:', e);
+                  }
+
+                  // Emit socket events
+                  const io = req.app?.locals?.io;
+                  if (io) {
+                    confirmedBookings.forEach(b => {
+                      io.to(`driver:${b.driverId}`).emit('vehicle_assigned', {
+                        bookingId: b._id,
+                        vehicleId: vehicle._id,
+                        title: 'Vehicle Assigned',
+                        message: `Your vehicle ${vehicle.carName || vehicle.name || ''} has been assigned.`
+                      });
+                    });
+                  }
+
+                  // Send FCM to drivers
+                  try {
+                    await _sendFcmToUserIds('driver', userIds, 'Vehicle Assigned', `Your vehicle ${vehicle.carName || vehicle.name || ''} has been assigned.`, { vehicleId: vehicle._id });
+                  } catch (e) {
+                    console.error('Failed to send FCM for vehicle assignment:', e);
+                  }
+                }
+              } catch (e) {
+                console.error('Error while notifying confirmed bookings on vehicle assignment:', e);
               }
 
               const totalMatches = await DriverPlanSelection.countDocuments(query);
