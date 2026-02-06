@@ -9,10 +9,38 @@ import { Server as IOServer } from 'socket.io';
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// ✅ Allow frontend devices (update origin if needed)
+// ✅ CORS configuration - allows requests from frontend
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://192.168.1.57:3000',
+  'https://www.24carrental.in',
+  'https://24carrental.in',
+  'http://www.24carrental.in',
+  'http://24carrental.in',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: "*", // or "http://192.168.1.57:3000" for your frontend
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Allow all origins in development or if FRONTEND_URL is not set
+    if (process.env.NODE_ENV !== 'production' || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '50mb' }));
