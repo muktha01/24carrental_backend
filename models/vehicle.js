@@ -63,6 +63,10 @@ const VehicleSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  pricePerHour: {
+    type: Number,
+    default: 0
+  },
   securityDeposit: {
     type: Number,
     default: 0
